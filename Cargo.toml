@@ -16,3 +16,4 @@ logic_based_learning_paths = { path = "/home/vincentn/Projects/logic_based_learn
 schemars = "0.8.21"
 serde_json = "1.0.135"
 zip = { version = "0.6.6", default-features = false }
+petgraph = { version = "0.6", features = [ "serde-1" ] }

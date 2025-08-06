@@ -1,9 +1,10 @@
 use extism_pdk::*;
 use logic_based_learning_paths::domain_without_loading::{
-    ArchivePayload, ArtifactMapping, EdgeType, ParamsSchema,
+    ArchivePayload, EdgeType, ParamsSchema, RootedSupercluster,
 };
+use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
-use std::collections::HashSet;
+use std::io::Write;
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 
@@ -16,8 +17,6 @@ extern "ExtismHost" {
 
 #[plugin_fn]
 pub fn get_params_schema(_: ()) -> FnResult<ParamsSchema> {
-    let parameters = HashMap::new();
-    // insert key-value pairs into `parameters` here
     Ok(ParamsSchema {
         schema: HashMap::new(),
     })
@@ -27,22 +26,15 @@ pub fn get_params_schema(_: ()) -> FnResult<ParamsSchema> {
 pub fn process_paths(_: ArchivePayload) -> FnResult<()> {
     let zip_path = std::path::Path::new("archive.zip");
     // may need a host function for this?
-    // or may be able to create everything locally and then copy
     let zip_file = std::fs::File::create(zip_path).map_err(|e| e.to_string())?;
-    // copy clusters into zipped folder
     let mut zip = zip::ZipWriter::new(zip_file);
 
-    let supercluster: RootedSuperCluster =
+    let supercluster: RootedSupercluster =
         todo!("Need to supply this, used to just grab the app state.");
-    let _component_clusters_and_artifact_mappings: Vec<(
-        domain::Cluster,
-        HashSet<ArtifactMapping>,
-    )> = todo!("need to supply this");
 
     let options = FileOptions::default()
         .compression_method(CompressionMethod::Stored)
         .unix_permissions(0o755);
-    // TODO: factor this out?
     {
         let (supercluster, roots) = (&supercluster.graph, &supercluster.roots);
 
