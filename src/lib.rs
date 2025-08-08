@@ -1,8 +1,9 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
 use extism_pdk::*;
 use logic_based_learning_paths::domain_without_loading::{
-    ArchivePayload, ArtifactMapping, EdgeType, FileWriteBase64OperationInPayload, NodeID,
-    ParamsSchema, RootedSupercluster, UnlockingCondition, WorkflowStepProcessingResult,
+    ArchivePayload, ArtifactMapping, EdgeType, FileReadBase64AnyClusterOperationInPayload,
+    FileReadBase64OperationOutPayload, FileWriteBase64OperationInPayload, NodeID, ParamsSchema,
+    RootedSupercluster, UnlockingCondition, WorkflowStepProcessingResult,
 };
 use logic_based_learning_paths::graph_analysis;
 use petgraph::graph::NodeIndex;
@@ -22,10 +23,9 @@ struct ReadableUnlockingCondition {
 #[host_fn]
 extern "ExtismHost" {
     fn write_binary_file_base64(payload: FileWriteBase64OperationInPayload) -> ();
-
-    // write required host functions here
-    // fn get_last_modification_time(relative_path: String) -> SystemTimePayload;
-    // will need something to read a file as bytes, probably
+    fn read_binary_file_base64_from_any_cluster(
+        payload: FileReadBase64AnyClusterOperationInPayload,
+    ) -> FileReadBase64OperationOutPayload;
 }
 
 #[plugin_fn]
@@ -109,7 +109,6 @@ pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepPr
     }
 
     {
-        let mut artifact_file_buffer = Vec::new();
         for ArtifactMapping {
             local_file,
             root_relative_target_dir,
@@ -128,18 +127,18 @@ pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepPr
                     options,
                 )
                 .map_err(|e| e.to_string());
-            // FIXME: need a different way to read...
-            // there is a host function for reading a file in binary mode
-            // but it is linked to a specific parent cluster
-            // I need a variant that can read from any of the child clusters
-            let mut file = File::open(local_file).map_err(|e| e.to_string())?;
-            file.read_to_end(&mut artifact_file_buffer)
-                .map_err(|e| e.to_string())?;
-            // TODO: use result
-            let _ = zip
-                .write_all(&artifact_file_buffer)
-                .map_err(|e| e.to_string());
-            artifact_file_buffer.clear();
+            unsafe {
+                let read_result = read_binary_file_base64_from_any_cluster(
+                    FileReadBase64AnyClusterOperationInPayload {
+                        absolute_path: local_file.to_string_lossy().into(),
+                    },
+                );
+                if let Ok(payload) = read_result {
+                    let base64_as_bytes = BASE64_ENGINE.decode(&payload.contents)?;
+                    // TODO: use result
+                    let _ = zip.write_all(&base64_as_bytes).map_err(|e| e.to_string());
+                }
+            }
         }
     }
 
