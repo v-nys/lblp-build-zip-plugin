@@ -1,14 +1,23 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
 use extism_pdk::*;
 use logic_based_learning_paths::domain_without_loading::{
-    ArchivePayload, EdgeType, FileWriteBase64OperationInPayload, ParamsSchema, RootedSupercluster,
-    WorkflowStepProcessingResult,
+    ArchivePayload, ArtifactMapping, EdgeType, FileWriteBase64OperationInPayload, NodeID,
+    ParamsSchema, RootedSupercluster, UnlockingCondition, WorkflowStepProcessingResult,
 };
-use petgraph::visit::EdgeRef;
-use std::collections::HashMap;
+use logic_based_learning_paths::graph_analysis;
+use petgraph::graph::NodeIndex;
+use petgraph::visit::{EdgeRef, IntoNeighbors, IntoNodeReferences};
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use zip::write::FileOptions;
 use zip::CompressionMethod;
+
+#[derive(Serialize)]
+struct ReadableUnlockingCondition {
+    pub all_of: HashSet<String>,
+    pub one_of: HashSet<String>,
+}
 
 #[host_fn]
 extern "ExtismHost" {
@@ -38,6 +47,8 @@ pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepPr
     let options = FileOptions::default()
         .compression_method(CompressionMethod::Stored)
         .unix_permissions(0o755);
+
+    // add YAML version of graph
     {
         let (supercluster, roots) = (&supercluster.graph, &supercluster.roots);
 
@@ -96,7 +107,161 @@ pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepPr
         let _ = zip.start_file("serialized_complete_graph.yaml", options); // TODO: use result
         let _ = zip.write(serialized.as_bytes()); // ditto
     }
-    // TODO: add stuff from before to zip
+
+    {
+        let mut artifact_file_buffer = Vec::new();
+        for ArtifactMapping {
+            local_file,
+            root_relative_target_dir,
+        } in archive_payload.artifact_mapping.iter()
+        {
+            // TODO: use result
+            let _ = zip
+                .start_file(
+                    root_relative_target_dir
+                        .join(
+                            local_file
+                                .file_name()
+                                .expect("Artifacts should be files, not directories."),
+                        )
+                        .to_string_lossy(),
+                    options,
+                )
+                .map_err(|e| e.to_string());
+            // FIXME: need a different way to read...
+            // there is a host function for reading a file in binary mode
+            // but it is linked to a specific parent cluster
+            // I need a variant that can read from any of the child clusters
+            let mut file = File::open(local_file).map_err(|e| e.to_string())?;
+            file.read_to_end(&mut artifact_file_buffer)
+                .map_err(|e| e.to_string())?;
+            // TODO: use result
+            let _ = zip
+                .write_all(&artifact_file_buffer)
+                .map_err(|e| e.to_string());
+            artifact_file_buffer.clear();
+        }
+    }
+
+    // add unlocking conditions
+    {
+        let (
+            (
+                dependent_to_dependency_graph,
+                dependent_to_dependency_tc,
+                dependent_to_dependency_revmap,
+                dependent_to_dependency_toposort_order,
+            ),
+            (
+                dependency_to_dependent_graph,
+                dependency_to_dependent_tc,
+                dependency_to_dependent_revmap,
+                dependency_to_dependent_toposort_order,
+            ),
+            motivations_graph,
+        ) = graph_analysis::dependency_helpers(&supercluster);
+        let mut unlocking_conditions: HashMap<NodeID, Option<UnlockingCondition>> = HashMap::new();
+        let roots = &supercluster.roots;
+        supercluster.graph.node_references().for_each(
+            |(_supercluster_node_index, (supercluster_node_id, _))| {
+                if roots.contains(supercluster_node_id) {
+                    unlocking_conditions.insert(supercluster_node_id.clone(), None);
+                } else {
+                    // dependent_to... uses a subgraph, so indexes are different!
+                    // matching_node = "all-type" graph counterpart to the current supercluster node
+                    let matching_nodes = dependency_to_dependent_graph
+                        .node_references()
+                        .filter(|(_idx, weight)| &weight.0 == supercluster_node_id)
+                        .collect::<Vec<_>>();
+                    let matching_node = matching_nodes
+                        .get(0)
+                        .expect("Subgraph should contain all the supercluster nodes.");
+                    let matching_node_idx = matching_node.0.index();
+                    // denk dat dit strenger is dan nodig
+                    // dependent_to_dependency_tc betekent dat we *alle* harde dependencies zullen oplijsten
+                    // kan dit beperken tot enkel directe dependencies
+                    // i.e. de neighbors in dependent_to_depency_graph (neighbors = bereikbaar in één gerichte hop)
+                    let hard_dependency_ids: HashSet<NodeID> = dependent_to_dependency_tc
+                        .neighbors(dependent_to_dependency_revmap[matching_node_idx])
+                        .map(|ix: NodeIndex| dependent_to_dependency_toposort_order[ix.index()])
+                        .filter_map(|idx| {
+                            dependent_to_dependency_graph
+                                .node_weight(idx)
+                                .map(|(id, _)| id.clone())
+                        })
+                        .collect();
+                    let mut dependent_ids: HashSet<NodeID> = dependency_to_dependent_tc
+                        .neighbors(dependency_to_dependent_revmap[matching_node.0.index()])
+                        .map(|ix: NodeIndex| dependency_to_dependent_toposort_order[ix.index()])
+                        .filter_map(|idx| {
+                            dependency_to_dependent_graph
+                                .node_weight(idx)
+                                .map(|(id, _)| id.clone())
+                        })
+                        .collect();
+                    dependent_ids.insert(matching_node.1 .0.clone());
+                    let soft_dependency_ids = motivations_graph
+                        .node_references()
+                        .filter_map(|potential_motivator| {
+                            let neighbors: HashSet<NodeID> = motivations_graph
+                                .neighbors(potential_motivator.0)
+                                .filter_map(|motivator_index| {
+                                    motivations_graph
+                                        .node_weight(motivator_index)
+                                        .map(|(id, _)| id.to_owned())
+                                })
+                                .collect();
+                            if neighbors.is_disjoint(&dependent_ids) {
+                                None
+                            } else {
+                                Some(potential_motivator.1 .0.to_owned())
+                            }
+                        })
+                        .collect();
+                    unlocking_conditions.insert(
+                        supercluster_node_id.clone(),
+                        Some(UnlockingCondition {
+                            all_of: hard_dependency_ids,
+                            one_of: soft_dependency_ids,
+                        }),
+                    );
+                }
+            },
+        );
+        let representation: HashMap<_, _> = unlocking_conditions
+            .iter()
+            .map(|(k, v)| {
+                (
+                    format!("{}", k),
+                    v.as_ref().map(|condition| ReadableUnlockingCondition {
+                        all_of: condition
+                            .all_of
+                            .iter()
+                            .map(|node_id| format!("{}", node_id))
+                            .collect(),
+                        one_of: condition
+                            .one_of
+                            .iter()
+                            .map(|node_id| format!("{}", node_id))
+                            .collect(),
+                    }),
+                )
+            })
+            .collect();
+        // TODO: use result
+        let _ = zip
+            .start_file("unlocking_conditions.json", options)
+            .map_err(|ze| ze.to_string());
+        // TODO: use result
+        let _ = zip
+            .write(
+                serde_json::to_string_pretty(&representation)
+                    .unwrap()
+                    .as_bytes(),
+            )
+            .map_err(|ze| ze.to_string());
+    }
+    // TODO: add artifacts?
     let resulting_file = zip.finish();
     match resulting_file {
         Ok(cursor) => {
