@@ -103,7 +103,8 @@ fn add_yamlified_graph(
         });
     }
     zip.start_file("serialized_complete_graph.yaml", options)?;
-    zip.write(serialized.as_bytes())?;
+    // don't care how many bytes are written
+    let _ = zip.write(serialized.as_bytes())?;
     Ok(())
 }
 
@@ -249,11 +250,8 @@ fn add_unlocking_conditions(
         })
         .collect();
     zip.start_file("unlocking_conditions.json", options)?;
-    zip.write(
-        serde_json::to_string_pretty(&representation)
-            .unwrap()
-            .as_bytes(),
-    )?;
+    // don't care how many bytes are written
+    let _ = zip.write(serde_json::to_string_pretty(&representation)?.as_bytes())?;
     Ok(())
 }
 
