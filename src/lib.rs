@@ -6,14 +6,13 @@ use logic_based_learning_paths::domain_without_loading::{
     RootedSupercluster, UnlockingCondition, WorkflowStepProcessingResult,
 };
 use logic_based_learning_paths::graph_analysis;
-use petgraph::graph::NodeIndex;
+use petgraph::graph::{EdgeReference, NodeIndex};
 use petgraph::visit::{EdgeRef, IntoNeighbors, IntoNodeReferences};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Write};
 use zip::write::FileOptions;
-use zip::CompressionMethod;
-use zip::ZipWriter;
+use zip::{CompressionMethod, ZipWriter};
 
 #[derive(Serialize)]
 struct ReadableUnlockingCondition {
@@ -36,7 +35,8 @@ pub fn get_params_schema(_: ()) -> FnResult<ParamsSchema> {
     })
 }
 
-type ToBytesZipWriter = ZipWriter<Cursor<Vec<u8>>>;
+type ToBytesZipWriter = ZipWriter<SeekableBytes>;
+type SeekableBytes = Cursor<Vec<u8>>;
 
 fn add_yamlified_graph(
     supercluster: &RootedSupercluster,
@@ -44,44 +44,30 @@ fn add_yamlified_graph(
     options: FileOptions,
 ) -> anyhow::Result<()> {
     let (supercluster, roots) = (&supercluster.graph, &supercluster.roots);
-
-    // graph without nodes would not be valid
+    // NOTE: just building YAML by hand here
+    // could arguably use a builder of some sort
+    // but an extra dependency seems like overkill
+    //
+    // graph without nodes would not be valid, so definitely add that key
     let mut serialized = "nodes:\n".to_string();
     supercluster.node_weights().for_each(|(id, title)| {
         serialized.push_str(&format!("  - id: {id}\n"));
         serialized.push_str(&format!("    title: {title}\n"));
     });
-
-    // TODO: misschien gebruik maken van partition op edge_references?
-    let all_type_edges: Vec<_> = supercluster
+    // NOTE: partition creates two collections, not iterators
+    // so use Vec, not Iterator<Type = ...>
+    let (all_set, any_set): (Vec<EdgeReference<'_, EdgeType>>, _) = supercluster
         .edge_references()
-        .filter_map(|edge| {
-            if edge.weight() == &EdgeType::All {
-                Option::zip(
-                    supercluster.node_weight(edge.source()),
-                    supercluster.node_weight(edge.target()),
-                )
-                .map(|(n1, n2)| (n1.0.clone(), n2.0.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-    let any_type_edges: Vec<_> = supercluster
-        .edge_references()
-        .filter_map(|edge| {
-            if edge.weight() == &EdgeType::AtLeastOne {
-                Option::zip(
-                    supercluster.node_weight(edge.source()),
-                    supercluster.node_weight(edge.target()),
-                )
-                .map(|(n1, n2)| (n1.0.clone(), n2.0.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
+        .partition(|edge| edge.weight() == &EdgeType::All);
+    let edge_to_tuple = |edge: EdgeReference<'_, EdgeType>| {
+        Option::zip(
+            supercluster.node_weight(edge.source()),
+            supercluster.node_weight(edge.target()),
+        )
+        .map(|(n1, n2)| (n1.0.clone(), n2.0.clone()))
+    };
+    let all_type_edges: Vec<_> = all_set.into_iter().filter_map(edge_to_tuple).collect();
+    let any_type_edges: Vec<_> = any_set.into_iter().filter_map(edge_to_tuple).collect();
     if !all_type_edges.is_empty() {
         serialized.push_str("all_type_edges:\n");
         all_type_edges.iter().for_each(|(id1, id2)| {
@@ -257,7 +243,7 @@ fn add_unlocking_conditions(
 
 #[plugin_fn]
 pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepProcessingResult> {
-    let buffer: std::io::Cursor<Vec<u8>> = std::io::Cursor::new(vec![]);
+    let buffer: SeekableBytes = std::io::Cursor::new(vec![]);
     let mut zip = zip::ZipWriter::new(buffer);
     let supercluster: &RootedSupercluster = &archive_payload.rooted_supercluster;
     let options = FileOptions::default()
@@ -267,6 +253,7 @@ pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepPr
     include_artifacts(&archive_payload, &mut zip, options)?;
     add_unlocking_conditions(supercluster, &mut zip, options)?;
     let resulting_file = zip.finish();
+    // TODO: this block feels a bit clunky?
     match resulting_file {
         Ok(cursor) => {
             let base64_text = BASE64_ENGINE.encode(cursor.into_inner());
