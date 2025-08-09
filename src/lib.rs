@@ -55,27 +55,31 @@ fn add_yamlified_graph(
     // TODO: misschien gebruik maken van partition op edge_references?
     let all_type_edges: Vec<_> = supercluster
         .edge_references()
-        .filter(|e| e.weight() == &EdgeType::All)
-        .map(|e| {
-            Option::zip(
-                supercluster.node_weight(e.source()),
-                supercluster.node_weight(e.target()),
-            )
-            .map(|(n1, n2)| (n1.0.clone(), n2.0.clone()))
+        .filter_map(|edge| {
+            if edge.weight() == &EdgeType::All {
+                Option::zip(
+                    supercluster.node_weight(edge.source()),
+                    supercluster.node_weight(edge.target()),
+                )
+                .map(|(n1, n2)| (n1.0.clone(), n2.0.clone()))
+            } else {
+                None
+            }
         })
-        .flatten()
         .collect();
     let any_type_edges: Vec<_> = supercluster
         .edge_references()
-        .filter(|e| e.weight() == &EdgeType::AtLeastOne)
-        .map(|e| {
-            Option::zip(
-                supercluster.node_weight(e.source()),
-                supercluster.node_weight(e.target()),
-            )
-            .map(|(n1, n2)| (n1.0.clone(), n2.0.clone()))
+        .filter_map(|edge| {
+            if edge.weight() == &EdgeType::AtLeastOne {
+                Option::zip(
+                    supercluster.node_weight(edge.source()),
+                    supercluster.node_weight(edge.target()),
+                )
+                .map(|(n1, n2)| (n1.0.clone(), n2.0.clone()))
+            } else {
+                None
+            }
         })
-        .flatten()
         .collect();
 
     if !all_type_edges.is_empty() {
@@ -170,7 +174,7 @@ fn add_unlocking_conditions(
                     .filter(|(_idx, weight)| &weight.0 == supercluster_node_id)
                     .collect::<Vec<_>>();
                 let matching_node = matching_nodes
-                    .get(0)
+                    .first()
                     .expect("Subgraph should contain all the supercluster nodes.");
                 let matching_node_idx = matching_node.0.index();
                 // denk dat dit strenger is dan nodig
