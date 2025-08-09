@@ -1,4 +1,3 @@
-use anyhow;
 use base64::{engine::general_purpose::STANDARD as BASE64_ENGINE, Engine};
 use extism_pdk::*;
 use logic_based_learning_paths::domain_without_loading::{
@@ -49,8 +48,8 @@ fn add_yamlified_graph(
     // graph without nodes would not be valid
     let mut serialized = "nodes:\n".to_string();
     supercluster.node_weights().for_each(|(id, title)| {
-        serialized.push_str(&format!("  - id: {}\n", id));
-        serialized.push_str(&format!("    title: {}\n", title));
+        serialized.push_str(&format!("  - id: {id}\n"));
+        serialized.push_str(&format!("    title: {title}\n"));
     });
 
     // TODO: misschien gebruik maken van partition op edge_references?
@@ -79,24 +78,24 @@ fn add_yamlified_graph(
         .flatten()
         .collect();
 
-    if all_type_edges.len() > 0 {
+    if !all_type_edges.is_empty() {
         serialized.push_str("all_type_edges:\n");
         all_type_edges.iter().for_each(|(id1, id2)| {
-            serialized.push_str(&format!("  - start_id: {}\n", id1));
-            serialized.push_str(&format!("    end_id: {}\n", id2));
+            serialized.push_str(&format!("  - start_id: {id1}\n"));
+            serialized.push_str(&format!("    end_id: {id2}\n"));
         })
     }
-    if any_type_edges.len() > 0 {
+    if !any_type_edges.is_empty() {
         serialized.push_str("any_type_edges:\n");
         any_type_edges.iter().for_each(|(id1, id2)| {
-            serialized.push_str(&format!("  - start_id: {}\n", id1));
-            serialized.push_str(&format!("    end_id: {}\n", id2));
+            serialized.push_str(&format!("  - start_id: {id1}\n"));
+            serialized.push_str(&format!("    end_id: {id2}\n"));
         })
     }
-    if roots.len() > 0 {
+    if !roots.is_empty() {
         serialized.push_str("roots:\n");
         roots.iter().for_each(|root| {
-            serialized.push_str(&format!("  - {}\n", root));
+            serialized.push_str(&format!("  - {root}\n"));
         });
     }
     zip.start_file("serialized_complete_graph.yaml", options)?;
@@ -156,7 +155,7 @@ fn add_unlocking_conditions(
             dependency_to_dependent_toposort_order,
         ),
         motivations_graph,
-    ) = graph_analysis::dependency_helpers(&supercluster);
+    ) = graph_analysis::dependency_helpers(supercluster);
     let mut unlocking_conditions: HashMap<NodeID, Option<UnlockingCondition>> = HashMap::new();
     let roots = &supercluster.roots;
     supercluster.graph.node_references().for_each(
@@ -229,17 +228,17 @@ fn add_unlocking_conditions(
         .iter()
         .map(|(k, v)| {
             (
-                format!("{}", k),
+                format!("{k}"),
                 v.as_ref().map(|condition| ReadableUnlockingCondition {
                     all_of: condition
                         .all_of
                         .iter()
-                        .map(|node_id| format!("{}", node_id))
+                        .map(|node_id| format!("{node_id}"))
                         .collect(),
                     one_of: condition
                         .one_of
                         .iter()
-                        .map(|node_id| format!("{}", node_id))
+                        .map(|node_id| format!("{node_id}"))
                         .collect(),
                 }),
             )
@@ -262,11 +261,9 @@ pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepPr
     let options = FileOptions::default()
         .compression_method(CompressionMethod::Stored)
         .unix_permissions(0o755);
-
-    let yamlification_result = add_yamlified_graph(supercluster, &mut zip, options);
-    let artifact_inclusion_result = include_artifacts(&archive_payload, &mut zip, options);
-    let unlocking_conditions_result = add_unlocking_conditions(supercluster, &mut zip, options);
-
+    add_yamlified_graph(supercluster, &mut zip, options)?;
+    include_artifacts(&archive_payload, &mut zip, options)?;
+    add_unlocking_conditions(supercluster, &mut zip, options)?;
     let resulting_file = zip.finish();
     match resulting_file {
         Ok(cursor) => {
@@ -274,7 +271,7 @@ pub fn process_paths(archive_payload: ArchivePayload) -> FnResult<WorkflowStepPr
             unsafe {
                 let write_result = write_binary_file_base64(FileWriteBase64OperationInPayload {
                     relative_path: "archive.zip".to_owned(),
-                    base64_text: base64_text,
+                    base64_text,
                 });
                 write_result
                     .map(|_| WorkflowStepProcessingResult {
