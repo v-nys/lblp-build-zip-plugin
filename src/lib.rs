@@ -58,7 +58,10 @@ fn add_yamlified_graph(
     // so use Vec, not Iterator<Type = ...>
     let (all_set, any_set): (Vec<EdgeReference<'_, EdgeType>>, _) = supercluster
         .edge_references()
-        .partition(|edge| edge.weight() == &EdgeType::All);
+        .partition(|edge| match edge.weight() {
+            &EdgeType::All => true,
+            &EdgeType::AtLeastOne => false,
+        });
     let edge_to_tuple = |edge: EdgeReference<'_, EdgeType>| {
         Option::zip(
             supercluster.node_weight(edge.source()),
