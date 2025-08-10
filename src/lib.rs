@@ -152,8 +152,10 @@ fn add_unlocking_conditions(
     ) = graph_analysis::dependency_helpers(supercluster);
     let mut unlocking_conditions: HashMap<NodeID, Option<UnlockingCondition>> = HashMap::new();
     let roots = &supercluster.roots;
-    supercluster.graph.node_references().for_each(
-        |(_supercluster_node_index, (supercluster_node_id, _))| {
+    for (_supercluster_node_index, (supercluster_node_id, _)) in
+        supercluster.graph.node_references()
+    {
+        {
             if roots.contains(supercluster_node_id) {
                 unlocking_conditions.insert(supercluster_node_id.clone(), None);
             } else {
@@ -165,7 +167,8 @@ fn add_unlocking_conditions(
                     .collect::<Vec<_>>();
                 let matching_node = matching_nodes
                     .first()
-                    .expect("Subgraph should contain all the supercluster nodes.");
+                    .ok_or(anyhow::anyhow!("Subgraph of supercluster does not contain any nodes. This means all clusters are empty."))?
+                    ;
                 let matching_node_idx = matching_node.0.index();
                 // denk dat dit strenger is dan nodig
                 // dependent_to_dependency_tc betekent dat we *alle* harde dependencies zullen oplijsten
@@ -216,8 +219,8 @@ fn add_unlocking_conditions(
                     }),
                 );
             }
-        },
-    );
+        }
+    }
     let representation: HashMap<_, _> = unlocking_conditions
         .iter()
         .map(|(k, v)| {
