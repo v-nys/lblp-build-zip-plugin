@@ -58,9 +58,9 @@ fn add_yamlified_graph(
     // so use Vec, not Iterator<Type = ...>
     let (all_set, any_set): (Vec<EdgeReference<'_, EdgeType>>, _) = supercluster
         .edge_references()
-        .partition(|edge| match edge.weight() {
-            &EdgeType::All => true,
-            &EdgeType::AtLeastOne => false,
+        .partition(|edge| match *edge.weight() {
+            EdgeType::All => true,
+            EdgeType::AtLeastOne => false,
         });
     let edge_to_tuple = |edge: EdgeReference<'_, EdgeType>| {
         Option::zip(
@@ -153,70 +153,68 @@ fn add_unlocking_conditions(
     for (_supercluster_node_index, (supercluster_node_id, _)) in
         supercluster.graph.node_references()
     {
-        {
-            if roots.contains(supercluster_node_id) {
-                unlocking_conditions.insert(supercluster_node_id.clone(), None);
-            } else {
-                // dependent_to... uses a subgraph, so indexes are different!
-                // matching_node = "all-type" graph counterpart to the current supercluster node
-                let matching_nodes = dependency_to_dependent_graph
-                    .node_references()
-                    .filter(|(_idx, weight)| &weight.0 == supercluster_node_id)
-                    .collect::<Vec<_>>();
-                let matching_node = matching_nodes
+        if roots.contains(supercluster_node_id) {
+            unlocking_conditions.insert(supercluster_node_id.clone(), None);
+        } else {
+            // dependent_to... uses a subgraph, so indexes are different!
+            // matching_node = "all-type" graph counterpart to the current supercluster node
+            let matching_nodes = dependency_to_dependent_graph
+                .node_references()
+                .filter(|(_idx, weight)| &weight.0 == supercluster_node_id)
+                .collect::<Vec<_>>();
+            let matching_node = matching_nodes
                     .first()
                     .ok_or(anyhow::anyhow!("Subgraph of supercluster does not contain any nodes. This means all clusters are empty."))?
                     ;
-                let matching_node_idx = matching_node.0.index();
-                // denk dat dit strenger is dan nodig
-                // dependent_to_dependency_tc betekent dat we *alle* harde dependencies zullen oplijsten
-                // kan dit beperken tot enkel directe dependencies
-                // i.e. de neighbors in dependent_to_depency_graph (neighbors = bereikbaar in één gerichte hop)
-                let hard_dependency_ids: HashSet<NodeID> = dependent_to_dependency_tc
-                    .neighbors(dependent_to_dependency_revmap[matching_node_idx])
-                    .map(|ix: NodeIndex| dependent_to_dependency_toposort_order[ix.index()])
-                    .filter_map(|idx| {
-                        dependent_to_dependency_graph
-                            .node_weight(idx)
-                            .map(|(id, _)| id.clone())
-                    })
-                    .collect();
-                let mut dependent_ids: HashSet<NodeID> = dependency_to_dependent_tc
-                    .neighbors(dependency_to_dependent_revmap[matching_node.0.index()])
-                    .map(|ix: NodeIndex| dependency_to_dependent_toposort_order[ix.index()])
-                    .filter_map(|idx| {
-                        dependency_to_dependent_graph
-                            .node_weight(idx)
-                            .map(|(id, _)| id.clone())
-                    })
-                    .collect();
-                dependent_ids.insert(matching_node.1 .0.clone());
-                let soft_dependency_ids = motivations_graph
-                    .node_references()
-                    .filter_map(|potential_motivator| {
-                        let neighbors: HashSet<NodeID> = motivations_graph
-                            .neighbors(potential_motivator.0)
-                            .filter_map(|motivator_index| {
-                                motivations_graph
-                                    .node_weight(motivator_index)
-                                    .map(|(id, _)| id.to_owned())
-                            })
-                            .collect();
-                        if neighbors.is_disjoint(&dependent_ids) {
-                            None
-                        } else {
-                            Some(potential_motivator.1 .0.to_owned())
-                        }
-                    })
-                    .collect();
-                unlocking_conditions.insert(
-                    supercluster_node_id.clone(),
-                    Some(UnlockingCondition {
-                        all_of: hard_dependency_ids,
-                        one_of: soft_dependency_ids,
-                    }),
-                );
-            }
+            let matching_node_idx = matching_node.0.index();
+            // denk dat dit strenger is dan nodig
+            // dependent_to_dependency_tc betekent dat we *alle* harde dependencies zullen oplijsten
+            // kan dit beperken tot enkel directe dependencies
+            // i.e. de neighbors in dependent_to_depency_graph (neighbors = bereikbaar in één gerichte hop)
+            let hard_dependency_ids: HashSet<NodeID> = dependent_to_dependency_tc
+                .neighbors(dependent_to_dependency_revmap[matching_node_idx])
+                .map(|ix: NodeIndex| dependent_to_dependency_toposort_order[ix.index()])
+                .filter_map(|idx| {
+                    dependent_to_dependency_graph
+                        .node_weight(idx)
+                        .map(|(id, _)| id.clone())
+                })
+                .collect();
+            let mut dependent_ids: HashSet<NodeID> = dependency_to_dependent_tc
+                .neighbors(dependency_to_dependent_revmap[matching_node.0.index()])
+                .map(|ix: NodeIndex| dependency_to_dependent_toposort_order[ix.index()])
+                .filter_map(|idx| {
+                    dependency_to_dependent_graph
+                        .node_weight(idx)
+                        .map(|(id, _)| id.clone())
+                })
+                .collect();
+            dependent_ids.insert(matching_node.1 .0.clone());
+            let soft_dependency_ids = motivations_graph
+                .node_references()
+                .filter_map(|potential_motivator| {
+                    let neighbors: HashSet<NodeID> = motivations_graph
+                        .neighbors(potential_motivator.0)
+                        .filter_map(|motivator_index| {
+                            motivations_graph
+                                .node_weight(motivator_index)
+                                .map(|(id, _)| id.to_owned())
+                        })
+                        .collect();
+                    if neighbors.is_disjoint(&dependent_ids) {
+                        None
+                    } else {
+                        Some(potential_motivator.1 .0.to_owned())
+                    }
+                })
+                .collect();
+            unlocking_conditions.insert(
+                supercluster_node_id.clone(),
+                Some(UnlockingCondition {
+                    all_of: hard_dependency_ids,
+                    one_of: soft_dependency_ids,
+                }),
+            );
         }
     }
     let representation: HashMap<_, _> = unlocking_conditions
