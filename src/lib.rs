@@ -158,14 +158,10 @@ fn add_unlocking_conditions(
         } else {
             // dependent_to... uses a subgraph, so indexes are different!
             // matching_node = "all-type" graph counterpart to the current supercluster node
-            let matching_nodes = dependency_to_dependent_graph
+            let matching_node = dependency_to_dependent_graph
                 .node_references()
-                .filter(|(_idx, weight)| &weight.0 == supercluster_node_id)
-                .collect::<Vec<_>>();
-            let matching_node = matching_nodes
-                    .first()
-                    .ok_or(anyhow::anyhow!("Subgraph of supercluster does not contain any nodes. This means all clusters are empty."))?
-                    ;
+                .find(|(_idx, weight)| &weight.0 == supercluster_node_id)
+                .ok_or(anyhow::anyhow!("Subgraph of supercluster does not contain any nodes. This means all clusters are empty."))?;
             let matching_node_idx = matching_node.0.index();
             // denk dat dit strenger is dan nodig
             // dependent_to_dependency_tc betekent dat we *alle* harde dependencies zullen oplijsten
