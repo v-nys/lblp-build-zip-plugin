@@ -109,11 +109,9 @@ fn include_artifacts(
     {
         zip.start_file(
             root_relative_target_dir
-                .join(
-                    local_file
-                        .file_name()
-                        .expect("Artifacts should be files, not directories."),
-                )
+                .join(local_file.file_name().ok_or(anyhow::anyhow!(
+                    "Artifacts should be files, not directories."
+                ))?)
                 .to_string_lossy(),
             options,
         )?;
